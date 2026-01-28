@@ -46,6 +46,10 @@ st.markdown('<p class="sub-header">環境DNA魚類検出結果の可視化ツー
 
 def parse_mitfish_csv(df):
     """MitoFish CSVファイルを解析してデータを抽出"""
+    
+    # デバッグ: 列名を確認
+    st.sidebar.write("検出された列:", list(df.columns[:5]), "...")
+    
     # サンプル列を特定（.fastqを含む列名）
     sample_cols = [col for col in df.columns if '.fastq' in col.lower()]
     
@@ -53,7 +57,7 @@ def parse_mitfish_csv(df):
         # .fastqがない場合、数値列を探す
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         # 既知のメタデータ列を除外
-        exclude_patterns = ['Identity', 'Max', 'Positive', 'TaxonID']
+        exclude_patterns = ['Identity', 'Max', 'Positive', 'TaxonID', 'Genes', 'Libs']
         sample_cols = [col for col in numeric_cols 
                       if not any(pat.lower() in col.lower() for pat in exclude_patterns)]
     
@@ -63,17 +67,38 @@ def parse_mitfish_csv(df):
     
     # 魚種情報を取得
     species_col = None
-    for col in ['Species', 'species', 'SPECIES', '種名']:
-        if col in df.columns:
+    for col in df.columns:
+        col_lower = col.lower().strip()
+        if col_lower in ['species', '種名', '種', 'taxon', 'taxonomy']:
             species_col = col
             break
     
+    # Species列が見つからない場合、2番目の列を使用（TaxonIDsの次）
     if species_col is None:
-        species_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+        if len(df.columns) > 1:
+            species_col = df.columns[1]
+        else:
+            species_col = df.columns[0]
+    
+    st.sidebar.write("魚種列:", species_col)
+    
+    # 魚種名を処理
+    species_names = []
+    for val in df[species_col].fillna('Unknown').astype(str):
+        # セミコロンで複数種が区切られている場合、最初の種名を使用
+        if ';' in val:
+            first_species = val.split(';')[0].strip()
+            count = val.count(';') + 1
+            species_names.append(f"{first_species} (+{count-1}種)")
+        else:
+            species_names.append(val.strip())
     
     # データを抽出
-    species_names = df[species_col].fillna('Unknown').astype(str).tolist()
-    abundance_data = df[sample_cols].fillna(0).astype(float)
+    abundance_data = df[sample_cols].fillna(0)
+    
+    # 数値に変換（エラーがあれば0に）
+    for col in abundance_data.columns:
+        abundance_data[col] = pd.to_numeric(abundance_data[col], errors='coerce').fillna(0)
     
     # サンプル名をクリーンアップ
     clean_sample_names = []
@@ -106,28 +131,25 @@ def create_stacked_bar_chart(species, abundance_df, sample_names, show_percentag
     
     df = abundance_df.copy()
     df.columns = sample_names
+    df.index = species  # 魚種名をインデックスに設定
     
     # 各種の合計を計算してソート
     species_totals = df.sum(axis=1)
-    sorted_indices = species_totals.argsort()[::-1]
+    sorted_indices = species_totals.sort_values(ascending=False).index
     
     # 上位N種に絞る
     if top_n and top_n < len(species):
-        top_indices = sorted_indices[:top_n]
-        other_sum = df.iloc[sorted_indices[top_n:]].sum()
+        top_species = sorted_indices[:top_n]
+        other_species = sorted_indices[top_n:]
         
-        df_top = df.iloc[top_indices].copy()
-        species_top = [species[i] for i in top_indices]
+        df_top = df.loc[top_species].copy()
+        other_sum = df.loc[other_species].sum()
         
         # その他を追加
-        df_top.loc['Other'] = other_sum
-        species_top.append('その他 (Other)')
-        
+        df_top.loc['その他 (Other)'] = other_sum
         df = df_top
-        species = species_top
     else:
-        df = df.iloc[sorted_indices]
-        species = [species[i] for i in sorted_indices]
+        df = df.loc[sorted_indices]
     
     # パーセンテージ計算
     if show_percentage:
@@ -191,24 +213,25 @@ def create_heatmap(species, abundance_df, sample_names, log_scale=False):
     
     df = abundance_df.copy()
     df.columns = sample_names
+    df.index = species  # 魚種名をインデックスに設定
     
     # 各種の合計でソート
     species_totals = df.sum(axis=1)
-    sorted_indices = species_totals.argsort()[::-1]
-    df = df.iloc[sorted_indices]
-    sorted_species = [species[i] for i in sorted_indices]
+    sorted_species = species_totals.sort_values(ascending=False).index
+    df = df.loc[sorted_species]
     
     # 対数スケール
     if log_scale:
-        df = np.log10(df + 1)
+        plot_data = np.log10(df.values + 1)
         colorbar_title = "Log10(リード数+1)"
     else:
+        plot_data = df.values
         colorbar_title = "リード数"
     
     fig = go.Figure(data=go.Heatmap(
-        z=df.values,
+        z=plot_data,
         x=sample_names,
-        y=sorted_species,
+        y=list(sorted_species),
         colorscale='YlOrRd',
         colorbar=dict(title=colorbar_title)
     ))
