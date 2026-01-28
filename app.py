@@ -80,11 +80,21 @@ def parse_mitfish_csv(df):
     for col in sample_cols:
         # ファイル名からサンプル名を抽出
         name = col.replace('.fastq', '').replace('.FASTQ', '')
-        # 数字-数字-名前-数字 のパターンを処理
+        # 数字-数字-名前-数字 のパターンを処理 (例: 1-1-tamagawa-6000)
         parts = name.split('-')
         if len(parts) >= 3:
-            # 中央部分を取得（サイト名）
-            name = '-'.join(parts[2:-1]) if len(parts) > 3 else parts[2]
+            # サイト名と番号を組み合わせて一意にする (例: tamagawa-1)
+            site_name = '-'.join(parts[2:-1]) if len(parts) > 3 else parts[2]
+            sample_num = parts[0] if parts[0].isdigit() else ''
+            name = f"{site_name}-{sample_num}" if sample_num else site_name
+        
+        # 重複チェック - 既に同じ名前があれば番号を付ける
+        base_name = name
+        counter = 1
+        while name in clean_sample_names:
+            counter += 1
+            name = f"{base_name}_{counter}"
+        
         clean_sample_names.append(name)
     
     return species_names, abundance_data, clean_sample_names
